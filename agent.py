@@ -33,14 +33,16 @@ llm = ChatOpenAI(
 
 
 class LegacySSLAdapter(HTTPAdapter):
-    """兼容老旧政务网站的 SSL 适配器：降低安全等级、允许旧版 TLS 与弱套件"""
+    """data.beijing.gov.cn 只认 TLS1.2 + 静态 RSA 套件。
+    TLS1.3 / ECDHE 一律握手失败（BAD_ECPOINT 或 SSLV3_ALERT_HANDSHAKE_FAILURE），
+    所以必须锁死 1.2 并只提供 RSA 密钥交换套件。"""
     def init_poolmanager(self, *args, **kwargs):
         ctx = create_urllib3_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        ctx.minimum_version = ssl.TLSVersion.TLSv1
-        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-        ctx.set_ciphers("DEFAULT@SECLEVEL=0")
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2          # 关键：不许协商到 1.3
+        ctx.set_ciphers("AES256-SHA:AES128-SHA:DES-CBC3-SHA:@SECLEVEL=0")  # 关键：不要 ECDHE
         kwargs["ssl_context"] = ctx
         return super().init_poolmanager(*args, **kwargs)
 
