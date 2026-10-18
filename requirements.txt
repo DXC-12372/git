@@ -1,8 +1,0 @@
-streamlit
-pandas
-plotly
-requests
-langchain
-langchain-openai
-langchain-huggingface
-langchain-chroma
