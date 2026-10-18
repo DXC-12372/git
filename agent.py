@@ -19,10 +19,20 @@ import re
 
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-# DeepSeek 配置（从环境变量读取）
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-BEIJING_USERKEY = os.environ.get("BEIJING_USERKEY")
+# 配置读取：优先 Streamlit secrets（云端），其次环境变量（本机）
+def _get_secret(name: str, default: str = None):
+    try:
+        return st.secrets[name]
+    except Exception:
+        return os.environ.get(name, default)
+
+DEEPSEEK_API_KEY = _get_secret("DEEPSEEK_API_KEY")
+DEEPSEEK_BASE_URL = _get_secret("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+BEIJING_USERKEY = _get_secret("BEIJING_USERKEY")
+PUBLISHED_DATA_URL = _get_secret(
+    "PUBLISHED_DATA_URL",
+    "https://raw.githubusercontent.com/DXC-12372/DXC-12372/main/scenic_data.json"
+)
 
 llm = ChatOpenAI(
     model="deepseek-chat",
@@ -134,8 +144,33 @@ def get_beijing_scenic_data(scenic_name: str = "") -> str:
     MAX_CHARS = 8000
     if len(result) > MAX_CHARS:
         result = result[:MAX_CHARS] + f"\n...（内容过长已截断，共 {len(result)} 字符）"
-
     return result
+
+@tool
+def get_published_scenic_data(scenic_name: str = "") -> str:
+    """获取已发布的北京市重点景区饱和指数数据（由本机定时任务发布到GitHub）。
+    参数 scenic_name 为景区名称（如“长城”），只返回该景区相关数据行。
+    当 get_beijing_scenic_data 因SSL错误或网络超时失败时，请使用本工具。"""
+    try:
+        resp = requests.get(PUBLISHED_DATA_URL, timeout=20)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as e:
+        return f"发布数据获取失败：{e}"
+
+    header = payload.get("header", [])
+    body = payload.get("rows", [])
+    name = (scenic_name or "").strip()
+    matched = [r for r in body if any(name in cell for cell in r)] if name else body
+    matched = matched[:100]
+    if not matched:
+        return f"发布数据中未找到景区“{name}”。数据更新时间：{payload.get('updated_at')}"
+
+    lines = [",".join(header)] + [",".join(r) for r in matched]
+    result = "\n".join(lines)
+    if len(result) > 8000:
+        result = result[:8000] + f"\n...（内容过长已截断，共 {len(result)} 字符）"
+    return f"（数据发布时间：{payload.get('updated_at')}）\n{result}"
 
 #h获取当前时间
 def get_current_time():
