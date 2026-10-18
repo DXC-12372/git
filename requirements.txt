@@ -4,3 +4,5 @@ plotly
 langchain
 langchain-openai
 requests
+langchain-community
+curl_cffi
