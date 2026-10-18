@@ -31,7 +31,7 @@ DEEPSEEK_BASE_URL = _get_secret("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v
 BEIJING_USERKEY = _get_secret("BEIJING_USERKEY")
 PUBLISHED_DATA_URL = _get_secret(
     "PUBLISHED_DATA_URL",
-    "https://raw.githubusercontent.com/DXC-12372/DXC-12372/main/scenic_data.json"
+    "https://github.com/DXC-12372/git/blob/main/scenic_data.json"
 )
 
 llm = ChatOpenAI(
