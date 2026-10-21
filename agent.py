@@ -10,7 +10,7 @@ import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib3.exceptions import InsecureRequestWarning
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import json
 import plotly.express as px
 import pandas as pd
@@ -174,7 +174,8 @@ def get_published_scenic_data(scenic_name: str = "") -> str:
 
 #h获取当前时间
 def get_current_time():
-    current_time = datetime.now()
+    cn = timezone(timedelta(hours = 8))
+    current_time = datetime.now(cn)
     current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
     weekday_name = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][current_time.weekday()]
     return f"当前时间是 {current_time_str}，今天是 {weekday_name}"
@@ -190,7 +191,7 @@ agent = create_agent(
     system_prompt=(
         f"当前时间是 {time_info}"
         "你是北京景区人流预测助手。收到用户提问的景区后，调用 get_beijing_scenic_data 工具，"
-        "如果获取数据失败，不要放弃，请调用 get_published_scenic_data 工具。并说明，以后直接使用 get_published_scenic_data 工具。"
+        "如果获取数据失败，不要放弃，请调用 get_published_scenic_data 工具。并说明调用的工具。"
         "并把用户提到的景区名称作为 scenic_name 参数传入，只获取该景区相关数据。"
         "你获取的数据是以前的数据(时间不是当前时间)"
        """
