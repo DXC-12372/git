@@ -10,7 +10,7 @@ import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib3.exceptions import InsecureRequestWarning
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 import json
 import plotly.express as px
 import pandas as pd
@@ -33,6 +33,20 @@ PUBLISHED_DATA_URL = _get_secret(
     "PUBLISHED_DATA_URL",
     "https://raw.githubusercontent.com/DXC-12372/git/main/scenic_data.json"
 )
+agent_gaodekey = _get_secret("agent_gaodekey")
+
+# 景区简称/别名 -> 知识库正式名称（方便用户用口语化简称查询）
+SCENIC_ALIASES = {
+    "奥森": "奥林匹克森林公园",
+    "奥园": "奥林匹克森林公园",
+    "北动": "北京动物园",
+    "八达岭": "八达岭长城",
+    "长城": "八达岭长城",
+    "南锣": "南锣鼓巷",
+    "后海": "什刹海",
+    "前海": "什刹海",
+}
+
 
 llm = ChatOpenAI(
     model="deepseek-chat",
@@ -172,10 +186,49 @@ def get_published_scenic_data(scenic_name: str = "") -> str:
         result = result[:8000] + f"\n...（内容过长已截断，共 {len(result)} 字符）"
     return f"（数据发布时间：{payload.get('updated_at')}）\n{result}"
 
+# 景区背景知识库工具
+@tool
+def get_scenic_knowledge(scenic_name: str) -> str:
+    """调用高德地图API，查询北京景区的基础地理信息：地址、经纬度、开放时间、票价、评分、分类。
+        当知识库knowledge_base.json缺少该景区信息时，调用本工具补充景区基础资料。
+        参数 scenic_name：景区名称，会自动处理别名映射。
+        """
+    name = (scenic_name or "").strip()
+    if not name:
+        return "请传入景区名称"
+    # 复用你已有的别名映射
+    name = SCENIC_ALIASES.get(name, name)
+    if not agent_gaodekey:
+        return "未配置高德AMAP_KEY，无法调用高德接口"
+
+    params = {
+        "key": agent_gaodekey ,
+        "keywords": name,
+        "city": "北京"
+    }
+    try:
+        resp = requests.get("https://restapi.amap.com/v3/place/text", params=params, timeout=12, verify=False)
+        js = resp.json()
+    except Exception as e:
+        return f"高德接口请求失败：{str(e)}"
+
+    if not js.get("pois"):
+        return f"高德地图没有找到【{name}】的信息"
+    poi = js["pois"][0]
+    biz_ext = poi.get("biz_ext", {})
+    info_text = f"""【高德地图景区信息-{poi['name']}】
+    地址：{poi['address']}
+    经纬度：{poi['lon']},{poi['lat']}
+    分类：{poi['type']}
+    开放时间：{biz_ext.get('opentime', '无')}
+    门票价格：{biz_ext.get('cost', '无')}
+    评分：{poi.get('rating', '无')}
+    """
+    return info_text
+
 #h获取当前时间
 def get_current_time():
-    cn = timezone(timedelta(hours = 8))
-    current_time = datetime.now(cn)
+    current_time = datetime.now()
     current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
     weekday_name = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][current_time.weekday()]
     return f"当前时间是 {current_time_str}，今天是 {weekday_name}"
@@ -183,15 +236,15 @@ def get_current_time():
 time_info = get_current_time()
 print(time_info)
 # 构建Agent
-tools = [get_beijing_scenic_data,get_published_scenic_data]
+tools = [get_scenic_knowledge,get_beijing_scenic_data,get_published_scenic_data]
 
 agent = create_agent(
     model=llm,
     tools=tools,
     system_prompt=(
         f"当前时间是 {time_info}"
-        "你是北京景区人流预测助手。收到用户提问的景区后，调用 get_beijing_scenic_data 工具，"
-        "如果获取数据失败，不要放弃，请调用 get_published_scenic_data 工具。并说明调用的工具。"
+        "你是北京景区人流预测助手。收到用户提问的景区后，调用 get_beijing_scenic_data 和get_scenic_knowledge工具，"
+        "如果get_beijing_scenic_data获取数据失败，不要放弃，请调用 get_published_scenic_data 工具。并说明"
         "并把用户提到的景区名称作为 scenic_name 参数传入，只获取该景区相关数据。"
         "你获取的数据是以前的数据(时间不是当前时间)"
        """
