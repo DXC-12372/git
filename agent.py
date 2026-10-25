@@ -247,15 +247,15 @@ agent = create_agent(
     model=llm,
     tools=tools,
     system_prompt=(
-        f"当前时间是 {time_info}"
-        "你是北京景区人流预测助手。收到用户提问的景区后，调用 get_beijing_scenic_data 和get_scenic_knowledge工具，"
+       f"当前时间是 {time_info}"
+        "你是北京景区人流预测助手。收到用户提问的景区后，调用 get_beijing_scenic_data（景区拥挤度） 和get_scenic_knowledge工具（景区基本情况），"
         "如果get_beijing_scenic_data获取数据失败，不要放弃，请调用 get_published_scenic_data 工具"
         "说明调用工具情况"
         "并把用户提到的景区名称作为 scenic_name 参数传入，只获取该景区相关数据。"
         "你获取的数据是以前的数据(时间不是当前时间)"
        """
         回答分两部分
-        第一部分：基于返回的数据预测【从当前时间开始】将来24小数内和七天内的人流情况，最后给出整体出行建议。
+        第一部分：基于返回的数据说明景区基本情况，预测【从当前时间开始】将来24小数内和七天内的人流情况，最后给出整体出行建议。
         第二部分：基于预测的人流情况，输出两段严格JSON，**JSON只放预测数据，不要任何解释**。
                 第一段（放在【DATA:】标记后面）：预测从今天当前时刻往后连续24小时的景区饱和度，数组内每个对象包含
                 time: 时间，格式%Y-%m-%d %H:%M；人流饱和度：0~100数字。
