@@ -35,17 +35,6 @@ PUBLISHED_DATA_URL = _get_secret(
 )
 agent_gaodekey = _get_secret("agent_gaodekey")
 
-# 景区简称/别名 -> 知识库正式名称（方便用户用口语化简称查询）
-SCENIC_ALIASES = {
-    "奥森": "奥林匹克森林公园",
-    "奥园": "奥林匹克森林公园",
-    "北动": "北京动物园",
-    "八达岭": "八达岭长城",
-    "长城": "八达岭长城",
-    "南锣": "南锣鼓巷",
-    "后海": "什刹海",
-    "前海": "什刹海",
-}
 
 
 llm = ChatOpenAI(
@@ -196,15 +185,18 @@ def get_scenic_knowledge(scenic_name: str) -> str:
     name = (scenic_name or "").strip()
     if not name:
         return "请传入景区名称"
-    # 复用你已有的别名映射
-    name = SCENIC_ALIASES.get(name, name)
     if not agent_gaodekey:
         return "未配置高德AMAP_KEY，无法调用高德接口"
 
     params = {
-        "key": agent_gaodekey ,
+        "key": agent_gaodekey,
         "keywords": name,
-        "city": "北京"
+        "city": "北京",
+        "region": "北京",
+        "citylimit": "true",
+        "extensions": "all",  # 必须 all 才返回 biz_ext/rating/opentime/cost 等深度信息
+        "offset": "1",
+        "page": "1",
     }
     try:
         resp = requests.get("https://restapi.amap.com/v3/place/text", params=params, timeout=12, verify=False)
@@ -212,17 +204,30 @@ def get_scenic_knowledge(scenic_name: str) -> str:
     except Exception as e:
         return f"高德接口请求失败：{str(e)}"
 
+    if js.get("status") != "1":
+        return f"高德接口返回异常：{js.get('info', js)}"
     if not js.get("pois"):
         return f"高德地图没有找到【{name}】的信息"
+
     poi = js["pois"][0]
-    biz_ext = poi.get("biz_ext", {})
-    info_text = f"""【高德地图景区信息-{poi['name']}】
-    地址：{poi['address']}
-    经纬度：{poi['lon']},{poi['lat']}
-    分类：{poi['type']}
-    开放时间：{biz_ext.get('opentime', '无')}
-    门票价格：{biz_ext.get('cost', '无')}
-    评分：{poi.get('rating', '无')}
+    biz_ext = poi.get("biz_ext") or {}
+
+    # 高德坐标在 location 字段，格式“经度,纬度”，没有独立的 lon/lat
+    location = poi.get("location") or ""
+    lon, lat = (location.split(",") + ["", ""])[:2] if location else ("", "")
+
+    # address 可能为空列表，做兼容
+    address = poi.get("address")
+    if isinstance(address, list) or not address:
+        address = "暂无"
+
+    info_text = f"""【高德地图景区信息-{poi.get('name', name)}】
+    地址：{address}
+    经纬度：{lon},{lat}
+    分类：{poi.get('type', '无')}
+    开放时间：{biz_ext.get('opentime', '无') if isinstance(biz_ext, dict) else '无'}
+    门票价格：{biz_ext.get('cost', '无') if isinstance(biz_ext, dict) else '无'}
+    评分：{biz_ext.get('rating', '无') if isinstance(biz_ext, dict) else poi.get('rating', '无')}
     """
     return info_text
 
