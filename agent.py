@@ -1,23 +1,14 @@
 import streamlit as st
 import requests
 import os
-import io
-import csv
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.tools import tool
-import ssl
-from requests.adapters import HTTPAdapter
-from urllib3.util.ssl_ import create_urllib3_context
-from urllib3.exceptions import InsecureRequestWarning
 from datetime import datetime
 import json
 import plotly.express as px
 import pandas as pd
 import re
-
-
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 # 配置读取：优先 Streamlit secrets（云端），其次环境变量（本机）
 def _get_secret(name: str, default: str = None):
@@ -43,111 +34,6 @@ llm = ChatOpenAI(
     openai_api_base=DEEPSEEK_BASE_URL,
     temperature=0
 )
-
-
-class LegacySSLAdapter(HTTPAdapter):
-    """兼容老旧政务网站的 SSL 适配器：降低安全等级、允许旧版 TLS 与弱套件"""
-    def init_poolmanager(self, *args, **kwargs):
-        ctx = create_urllib3_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        ctx.minimum_version = ssl.TLSVersion.TLSv1
-        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-        ctx.set_ciphers("DEFAULT@SECLEVEL=0")
-        kwargs["ssl_context"] = ctx
-        return super().init_poolmanager(*args, **kwargs)
-
-
-
-def _download_scenic_csv() -> str:
-    """调用接口并下载完整 CSV 文本（内部使用，不直接返回给大模型）。
-    优先使用 curl_cffi 模拟浏览器 TLS 指纹，规避 OpenSSL 3.x 对该政务站点的
-    `SSL: BAD_ECPOINT` 握手失败；若未安装 curl_cffi 则回退到 requests+LegacySSLAdapter。"""
-    apply_url = "https://data.beijing.gov.cn/cms/web/bjdata/api/userApply.jsp"
-    apply_params = {
-        "id": "e9f52465cfd7478eb0768b9978623e2d85427",
-        "key": BEIJING_USERKEY,
-    }
-
-    try:
-        from curl_cffi import requests as cffi_requests
-    except ImportError:
-        cffi_requests = None
-
-    if cffi_requests is not None:
-        # 方案A：curl_cffi（推荐，可绕过 BAD_ECPOINT）
-        resp = cffi_requests.get(apply_url, params=apply_params, timeout=15,
-                                 verify=False, impersonate="chrome")
-    else:
-        # 方案B：回退到 requests + 自定义 SSL 适配器
-        session = requests.Session()
-        session.mount("https://", LegacySSLAdapter())
-        session.mount("http://", LegacySSLAdapter())
-        resp = session.get(apply_url, params=apply_params, timeout=15, verify=False)
-
-    try:
-        info = resp.json()
-    except ValueError:
-        raise RuntimeError(f"接口未返回JSON，请检查 userKey。原始返回：{resp.text[:300]}")
-
-    if str(info.get("code")) != "0":
-        raise RuntimeError(f"接口返回异常：{info}")
-
-    file_url = (info.get("result") or {}).get("address")
-    if not file_url:
-        raise RuntimeError(f"未获取到文件下载地址：{info}")
-
-    if cffi_requests is not None:
-        file_resp = cffi_requests.get(file_url, timeout=30, verify=False, impersonate="chrome")
-        return file_resp.text
-    else:
-        file_resp = session.get(file_url, timeout=30, verify=False)
-        file_resp.encoding = file_resp.apparent_encoding or "gbk"
-        return file_resp.text
-
-
-@tool
-def get_beijing_scenic_data(scenic_name: str = "") -> str:
-    """获取北京市重点景区饱和指数数据。可选参数 scenic_name 为景区名称（如“朝阳公园”），
-    传入后只返回该景区相关的数据行，避免返回整份超大文件。"""
-    try:
-        content = _download_scenic_csv()
-    except Exception as e:
-        return f"数据获取失败：{e}"
-
-    if not content or len(content.strip()) < 10:
-        return "文件下载成功但内容为空。"
-
-    # 解析 CSV，只保留目标景区相关行，并做长度上限保护
-    name = (scenic_name or "").strip()
-    try:
-        reader = list(csv.reader(io.StringIO(content)))
-    except Exception:
-        reader = []
-
-    if reader:
-        header = reader[0]
-        body = reader[1:]
-        if name:
-            matched = [r for r in body if any(name in cell for cell in r)]
-        else:
-            matched = body
-
-        # 最多返回 100 行匹配数据，防止超长
-        matched = matched[:100]
-        lines = [",".join(header)] + [",".join(r) for r in matched]
-        result = "\n".join(lines)
-    else:
-        result = content
-
-    if not result.strip():
-        return f"未找到景区“{name}”的数据。CSV 表头为：{reader[0] if reader else '无法解析'}"
-
-    # 终极兜底：无论如何都不超过 8000 字符喂给模型
-    MAX_CHARS = 8000
-    if len(result) > MAX_CHARS:
-        result = result[:MAX_CHARS] + f"\n...（内容过长已截断，共 {len(result)} 字符）"
-    return result
 
 @tool
 def get_published_scenic_data(scenic_name: str = "") -> str:
@@ -241,16 +127,15 @@ def get_current_time():
 time_info = get_current_time()
 print(time_info)
 # 构建Agent
-tools = [get_scenic_knowledge,get_beijing_scenic_data,get_published_scenic_data]
+tools = [get_scenic_knowledge,get_published_scenic_data]
 
 agent = create_agent(
     model=llm,
     tools=tools,
     system_prompt=(
-       f"当前时间是 {time_info}"
-        "你是北京景区人流预测助手。收到用户提问的景区后，调用 get_beijing_scenic_data（景区拥挤度） 和get_scenic_knowledge工具（景区基本情况），"
-        "如果get_beijing_scenic_data获取数据失败，不要放弃，请调用 get_published_scenic_data 工具"
-        "说明调用 get_beijing_scenic_data，get_scenic_knowledge，get_published_scenic_data这三个工具的情况"
+        f"当前时间是 {time_info}"
+        "你是北京景区人流预测助手。收到用户提问的景区后，调用 get_published_scenic_data 工具（景区拥挤度）和get_scenic_knowledge工具（景区基本情况），"
+        "说明调用工具情况"
         "并把用户提到的景区名称作为 scenic_name 参数传入，只获取该景区相关数据。"
         "你获取的数据是以前的数据(时间不是当前时间)"
        """
